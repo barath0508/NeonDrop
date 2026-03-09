@@ -129,6 +129,7 @@ export default function FileTransfer({ rtcState }) {
     const [dragCount, setDragCount] = useState(0);
     const [stagedFiles, setStagedFiles] = useState([]);
     const [showHistory, setShowHistory] = useState(false);
+    const [isPendingSend, setIsPendingSend] = useState(false);
 
     React.useEffect(() => {
         if (status !== 'connected' && status !== 'connecting') {
@@ -168,14 +169,16 @@ export default function FileTransfer({ rtcState }) {
 
     const handleSendAll = useCallback(() => {
         if (!isSending && !isReceiving && stagedFiles.length > 0) {
-            sendFiles(stagedFiles);
+            setIsPendingSend(true);
+            const filesToSend = stagedFiles;
             setStagedFiles([]);
+            sendFiles(filesToSend).finally(() => setIsPendingSend(false));
         }
     }, [stagedFiles, isSending, isReceiving, sendFiles]);
 
     const clearStaged = useCallback(() => setStagedFiles([]), []);
 
-    const isTransferring = isSending || isReceiving;
+    const isTransferring = isSending || isReceiving || isPendingSend;
     const queueLabel = totalQueueLength > 1
         ? `File ${currentQueueIndex} of ${totalQueueLength}`
         : (isSending ? 'Sending File...' : 'Receiving File...');
@@ -235,9 +238,14 @@ export default function FileTransfer({ rtcState }) {
                                 {/* Progress Bar */}
                                 <div style={{ height: '10px', background: 'rgba(255,255,255,0.06)', borderRadius: '5px', overflow: 'hidden', margin: '1.5rem 0', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
                                     <motion.div
-                                        style={{ height: '100%', background: 'var(--accent-gradient)', boxShadow: '0 0 20px var(--accent-glow)' }}
-                                        animate={{ width: `${transferProgress}%` }}
-                                        transition={{ type: 'spring', stiffness: 80, damping: 25 }}
+                                        style={{
+                                            position: 'relative', height: '100%',
+                                            background: 'var(--accent-gradient)',
+                                            boxShadow: '0 0 20px var(--accent-glow)',
+                                            width: `${transferProgress}%`
+                                        }}
+                                        layout
+                                        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
                                     />
                                 </div>
 
