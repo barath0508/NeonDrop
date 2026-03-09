@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useMemo } from 'react';
+import React, { useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -15,8 +15,8 @@ function getFileIcon(type) {
     if (type.startsWith('audio/')) return Music;
     if (type === 'application/pdf') return FileText;
     if (type.includes('zip') || type.includes('rar') || type.includes('7z') || type.includes('tar') || type.includes('gzip')) return Archive;
-    if (type.startsWith('text/') || type.includes('json') || type.includes('xml') || type.includes('javascript') || type.includes('typescript')) return Code2;
-    if (type.includes('word') || type.includes('document') || type.includes('spreadsheet') || type.includes('presentation')) return FileText;
+    if (type.startsWith('text/') || type.includes('json') || type.includes('xml') || type.includes('javascript')) return Code2;
+    if (type.includes('word') || type.includes('document') || type.includes('spreadsheet')) return FileText;
     return File;
 }
 
@@ -44,17 +44,17 @@ function formatSpeed(speedBps) {
     return mbps.toFixed(2) + ' Mbps';
 }
 
-// --- Sub-components ---
-function FileRow({ file, index, isImage }) {
+function FileRow({ file, index }) {
     const Icon = getFileIcon(file.type);
     const color = getFileColor(file.type);
+    const isImage = file.type.startsWith('image/');
     const [thumbUrl] = useState(() => isImage ? URL.createObjectURL(file) : null);
 
     return (
         <motion.div
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: index * 0.05 }}
+            transition={{ delay: index * 0.04 }}
             style={{
                 display: 'flex', alignItems: 'center', gap: '12px',
                 padding: '10px 14px', borderRadius: '10px',
@@ -62,13 +62,12 @@ function FileRow({ file, index, isImage }) {
                 border: '1px solid rgba(255,255,255,0.07)'
             }}
         >
-            {thumbUrl ? (
-                <img src={thumbUrl} alt={file.name} style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: '6px', flexShrink: 0 }} />
-            ) : (
-                <div style={{ width: 36, height: 36, borderRadius: '8px', background: `${color}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            {thumbUrl
+                ? <img src={thumbUrl} alt={file.name} style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: '6px', flexShrink: 0 }} />
+                : <div style={{ width: 36, height: 36, borderRadius: '8px', background: `${color}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                     <Icon size={18} color={color} />
                 </div>
-            )}
+            }
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.9rem', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{file.name}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{formatSize(file.size)}</div>
@@ -101,8 +100,7 @@ function HistoryRow({ item }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                 {isSent
                     ? <ArrowUpRight size={16} color="var(--accent-blue)" />
-                    : <ArrowDownLeft size={16} color="var(--accent-green)" />
-                }
+                    : <ArrowDownLeft size={16} color="var(--accent-green)" />}
                 {item.blobUrl && (
                     <a href={item.blobUrl} download={item.name} onClick={e => e.stopPropagation()}
                         style={{ display: 'flex', padding: '4px', borderRadius: '6px', background: 'rgba(0,255,135,0.1)', color: 'var(--accent-green)' }}>
@@ -114,7 +112,7 @@ function HistoryRow({ item }) {
     );
 }
 
-// --- Main Component ---
+// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function FileTransfer({ rtcState }) {
     const navigate = useNavigate();
     const {
@@ -129,7 +127,6 @@ export default function FileTransfer({ rtcState }) {
     const [dragCount, setDragCount] = useState(0);
     const [stagedFiles, setStagedFiles] = useState([]);
     const [showHistory, setShowHistory] = useState(false);
-    const [isPendingSend, setIsPendingSend] = useState(false);
 
     React.useEffect(() => {
         if (status !== 'connected' && status !== 'connecting') {
@@ -144,7 +141,7 @@ export default function FileTransfer({ rtcState }) {
         if (e.type === 'dragenter' || e.type === 'dragover') {
             setDragActive(true);
             setDragCount(e.dataTransfer?.items?.length || 0);
-        } else if (e.type === 'dragleave') {
+        } else {
             setDragActive(false);
             setDragCount(0);
         }
@@ -155,33 +152,38 @@ export default function FileTransfer({ rtcState }) {
         e.stopPropagation();
         setDragActive(false);
         setDragCount(0);
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        if (e.dataTransfer.files?.length > 0) {
             setStagedFiles(Array.from(e.dataTransfer.files));
         }
     }, []);
 
     const handleChange = useCallback((e) => {
         e.preventDefault();
-        if (e.target.files && e.target.files.length > 0) {
+        if (e.target.files?.length > 0) {
             setStagedFiles(Array.from(e.target.files));
         }
     }, []);
 
     const handleSendAll = useCallback(() => {
         if (!isSending && !isReceiving && stagedFiles.length > 0) {
-            setIsPendingSend(true);
             const filesToSend = stagedFiles;
-            setStagedFiles([]);
-            sendFiles(filesToSend).finally(() => setIsPendingSend(false));
+            setStagedFiles([]); // clear staging panel immediately
+            sendFiles(filesToSend);
         }
     }, [stagedFiles, isSending, isReceiving, sendFiles]);
 
-    const clearStaged = useCallback(() => setStagedFiles([]), []);
+    const isTransferring = isSending || isReceiving;
 
-    const isTransferring = isSending || isReceiving || isPendingSend;
+    // Which panel to show inside the glass card
+    const panelMode =
+        isTransferring && transferProgress === 100 && !isSending && !isReceiving ? 'success'
+            : isTransferring ? 'progress'
+                : stagedFiles.length > 0 ? 'staged'
+                    : 'dropzone';
+
     const queueLabel = totalQueueLength > 1
         ? `File ${currentQueueIndex} of ${totalQueueLength}`
-        : (isSending ? 'Sending File...' : 'Receiving File...');
+        : (isSending ? 'Sending...' : 'Receiving...');
 
     return (
         <div className="full-height flex-center" style={{ flexDirection: 'column', gap: '1.5rem', paddingTop: '2rem', paddingBottom: '2rem' }}>
@@ -196,7 +198,7 @@ export default function FileTransfer({ rtcState }) {
                     <button
                         className="btn btn-secondary"
                         style={{ padding: '8px 16px', color: 'var(--accent-red)', borderColor: 'rgba(255, 8, 68, 0.3)' }}
-                        onClick={() => window.location.href = '/'}
+                        onClick={() => { window.location.href = '/'; }}
                     >
                         <X size={16} /> Disconnect
                     </button>
@@ -208,107 +210,92 @@ export default function FileTransfer({ rtcState }) {
                     </div>
                 )}
 
-                {/* Main Transfer Panel */}
-                <motion.div className="glass-panel" style={{ position: 'relative', overflow: 'hidden' }}>
+                {/* Main Card — always has enough content to hold its height */}
+                <motion.div className="glass-panel" layout>
+                    <AnimatePresence mode="wait">
 
-                    {/* Active Transfer Overlay */}
-                    <AnimatePresence>
-                        {isTransferring && (
-                            <motion.div
-                                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                                style={{
-                                    position: 'absolute', inset: 0,
-                                    background: 'rgba(15, 12, 41, 0.92)',
-                                    zIndex: 10, display: 'flex', flexDirection: 'column',
-                                    justifyContent: 'center', padding: '2.5rem',
-                                    backdropFilter: 'blur(30px)'
-                                }}
+                        {/* ── PROGRESS VIEW ───────────────────────────────── */}
+                        {panelMode === 'progress' && (
+                            <motion.div key="progress"
+                                initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+                                style={{ padding: '2.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
                             >
                                 <motion.div
-                                    animate={{ opacity: [0.4, 1, 0.4] }}
-                                    transition={{ duration: 2, repeat: Infinity }}
-                                    style={{ fontSize: '0.8rem', letterSpacing: '3px', textTransform: 'uppercase', color: 'var(--accent-blue)', marginBottom: '1.5rem', textAlign: 'center' }}
+                                    animate={{ opacity: [0.5, 1, 0.5] }}
+                                    transition={{ duration: 1.5, repeat: Infinity }}
+                                    style={{ fontSize: '0.75rem', letterSpacing: '3px', textTransform: 'uppercase', color: 'var(--accent-blue)', textAlign: 'center' }}
                                 >
                                     {queueLabel}
                                 </motion.div>
-                                <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '0.5rem', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {isSending ? 'Sending...' : (incomingFileInfo?.name || 'Receiving...')}
+
+                                <div style={{ fontWeight: 700, fontSize: '1.1rem', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {isReceiving ? (incomingFileInfo?.name || 'Receiving file...') : 'Sending...'}
                                 </div>
 
-                                {/* Progress Bar */}
-                                <div style={{ height: '10px', background: 'rgba(255,255,255,0.06)', borderRadius: '5px', overflow: 'hidden', margin: '1.5rem 0', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
-                                    <motion.div
-                                        style={{
-                                            position: 'relative', height: '100%',
-                                            background: 'var(--accent-gradient)',
-                                            boxShadow: '0 0 20px var(--accent-glow)',
-                                            width: `${transferProgress}%`
-                                        }}
-                                        layout
-                                        transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-                                    />
+                                {/* Progress bar — plain CSS transition, no Framer Motion */}
+                                <div style={{ height: '12px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', overflow: 'hidden', marginTop: '1rem', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
+                                    <div style={{
+                                        height: '100%',
+                                        width: `${transferProgress}%`,
+                                        background: 'linear-gradient(90deg, #00f2fe, #ff0844)',
+                                        boxShadow: '0 0 20px rgba(0, 242, 254, 0.5)',
+                                        borderRadius: '6px',
+                                        transition: 'width 0.3s ease'
+                                    }} />
                                 </div>
 
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.1rem', fontWeight: 'bold' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.2rem', fontWeight: 800 }}>
                                     <span>{transferProgress}%</span>
                                     <span style={{ color: 'var(--accent-blue)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                        <Activity size={16} />{formatSpeed(transferSpeed)}
+                                        <Activity size={18} />
+                                        {formatSpeed(transferSpeed)}
                                     </span>
                                 </div>
 
-                                {/* Queue dots */}
+                                {/* Queue indicator dots */}
                                 {totalQueueLength > 1 && (
-                                    <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '1.5rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '0.5rem' }}>
                                         {Array.from({ length: totalQueueLength }).map((_, i) => (
-                                            <motion.div key={i}
-                                                animate={{ opacity: i < currentQueueIndex ? 1 : 0.3, scale: i === currentQueueIndex - 1 ? 1.3 : 1 }}
-                                                style={{ width: 8, height: 8, borderRadius: '50%', background: i < currentQueueIndex ? 'var(--accent-blue)' : 'rgba(255,255,255,0.2)' }}
-                                            />
+                                            <div key={i} style={{
+                                                width: 8, height: 8, borderRadius: '50%',
+                                                background: i < currentQueueIndex ? 'var(--accent-blue)' : 'rgba(255,255,255,0.15)',
+                                                transition: 'background 0.3s'
+                                            }} />
                                         ))}
                                     </div>
                                 )}
                             </motion.div>
                         )}
-                    </AnimatePresence>
 
-                    {/* Success overlay */}
-                    <AnimatePresence>
-                        {transferProgress === 100 && !isTransferring && (
-                            <motion.div
+                        {/* ── SUCCESS VIEW ────────────────────────────────── */}
+                        {panelMode === 'success' && (
+                            <motion.div key="success"
                                 initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
-                                style={{
-                                    position: 'absolute', inset: 0, background: 'rgba(0, 255, 135, 0.08)',
-                                    zIndex: 20, display: 'flex', flexDirection: 'column',
-                                    justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(20px)'
-                                }}
+                                style={{ padding: '3rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}
                             >
-                                <CheckCircle size={56} color="var(--accent-green)" style={{ marginBottom: '1rem', filter: 'drop-shadow(0 0 20px rgba(0,255,135,0.4))' }} />
+                                <CheckCircle size={56} color="var(--accent-green)" style={{ filter: 'drop-shadow(0 0 20px rgba(0,255,135,0.5))' }} />
                                 <h2 style={{ color: 'var(--accent-green)' }}>
                                     {totalQueueLength > 1 ? `All ${totalQueueLength} files transferred!` : 'Transfer Complete!'}
                                 </h2>
                             </motion.div>
                         )}
-                    </AnimatePresence>
 
-                    {/* Staged File Queue Panel */}
-                    <AnimatePresence>
-                        {stagedFiles.length > 0 && !isTransferring && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}
+                        {/* ── STAGED FILES VIEW ───────────────────────────── */}
+                        {panelMode === 'staged' && (
+                            <motion.div key="staged"
+                                initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                                 style={{ padding: '1.5rem' }}
                             >
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                                     <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>
-                                        Ready to send — <span style={{ color: 'var(--accent-blue)' }}>{stagedFiles.length} file{stagedFiles.length > 1 ? 's' : ''}</span>
+                                        Ready — <span style={{ color: 'var(--accent-blue)' }}>{stagedFiles.length} file{stagedFiles.length > 1 ? 's' : ''}</span>
                                     </h3>
-                                    <button onClick={clearStaged} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px' }}>
+                                    <button onClick={() => setStagedFiles([])} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
                                         <X size={16} />
                                     </button>
                                 </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto', marginBottom: '1.5rem' }}>
-                                    {stagedFiles.map((f, i) => (
-                                        <FileRow key={i} file={f} index={i} isImage={f.type.startsWith('image/')} />
-                                    ))}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '260px', overflowY: 'auto', marginBottom: '1.5rem' }}>
+                                    {stagedFiles.map((f, i) => <FileRow key={i} file={f} index={i} />)}
                                 </div>
                                 <motion.button
                                     whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
@@ -317,90 +304,76 @@ export default function FileTransfer({ rtcState }) {
                                     onClick={handleSendAll}
                                 >
                                     <Send size={20} />
-                                    Send {stagedFiles.length > 1 ? `All ${stagedFiles.length} Files` : stagedFiles[0]?.name}
+                                    {stagedFiles.length > 1 ? `Send All ${stagedFiles.length} Files` : `Send ${stagedFiles[0]?.name}`}
                                 </motion.button>
                             </motion.div>
                         )}
-                    </AnimatePresence>
 
-                    {/* Dropzone */}
-                    {stagedFiles.length === 0 && !isTransferring && (
-                        <motion.div
-                            style={{
-                                padding: 'clamp(2rem, 8vw, 4rem) 2rem',
-                                textAlign: 'center',
-                                border: `2px dashed ${dragActive ? 'var(--accent-blue)' : 'var(--border-light)'}`,
-                                borderRadius: 'var(--border-radius-lg)',
-                                background: dragActive ? 'rgba(0, 242, 254, 0.04)' : 'transparent',
-                                transition: 'all 0.3s var(--ease-spring)',
-                                cursor: 'pointer', position: 'relative'
-                            }}
-                            whileHover={{ scale: 1.01 }}
-                            onDragEnter={handleDrag} onDragLeave={handleDrag}
-                            onDragOver={handleDrag} onDrop={handleDrop}
-                            onClick={() => document.getElementById('file-upload').click()}
-                        >
-                            <input
-                                type="file" id="file-upload" multiple
-                                accept="*/*"
-                                style={{ display: 'none' }}
-                                onChange={handleChange}
-                            />
-                            {dragActive && dragCount > 1 && (
-                                <motion.div
-                                    initial={{ scale: 0 }} animate={{ scale: 1 }}
-                                    style={{
+                        {/* ── DROPZONE VIEW ───────────────────────────────── */}
+                        {panelMode === 'dropzone' && (
+                            <motion.div key="dropzone"
+                                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                                style={{
+                                    padding: 'clamp(2rem, 8vw, 4rem) 2rem',
+                                    textAlign: 'center',
+                                    border: `2px dashed ${dragActive ? 'var(--accent-blue)' : 'var(--border-light)'}`,
+                                    borderRadius: 'var(--border-radius-lg)',
+                                    background: dragActive ? 'rgba(0, 242, 254, 0.04)' : 'transparent',
+                                    transition: 'all 0.3s var(--ease-spring)',
+                                    cursor: 'pointer', position: 'relative'
+                                }}
+                                onDragEnter={handleDrag} onDragLeave={handleDrag}
+                                onDragOver={handleDrag} onDrop={handleDrop}
+                                onClick={() => document.getElementById('file-upload').click()}
+                            >
+                                <input type="file" id="file-upload" multiple accept="*/*" style={{ display: 'none' }} onChange={handleChange} />
+
+                                {dragActive && dragCount > 1 && (
+                                    <div style={{
                                         position: 'absolute', top: '1rem', right: '1rem',
                                         background: 'var(--accent-gradient)', borderRadius: '20px',
                                         padding: '4px 12px', fontSize: '0.85rem', fontWeight: 700
-                                    }}
+                                    }}>
+                                        +{dragCount} files
+                                    </div>
+                                )}
+
+                                <motion.div
+                                    style={{ marginBottom: '1.5rem' }}
+                                    animate={{ y: [0, -8, 0] }}
+                                    transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
                                 >
-                                    +{dragCount} files
+                                    <div style={{
+                                        display: 'inline-flex', padding: '24px', borderRadius: '50%',
+                                        background: 'rgba(0, 242, 254, 0.08)',
+                                        boxShadow: dragActive ? '0 0 50px rgba(0, 242, 254, 0.3)' : '0 0 20px rgba(0, 242, 254, 0.1)',
+                                        transition: 'box-shadow 0.3s'
+                                    }}>
+                                        <UploadCloud size={48} color="var(--accent-blue)" />
+                                    </div>
                                 </motion.div>
-                            )}
-                            <motion.div
-                                style={{ marginBottom: '1.5rem' }}
-                                animate={{ y: [0, -8, 0] }}
-                                transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-                            >
-                                <div style={{
-                                    display: 'inline-flex', padding: '24px', borderRadius: '50%',
-                                    background: 'rgba(0, 242, 254, 0.08)',
-                                    boxShadow: dragActive ? '0 0 50px rgba(0, 242, 254, 0.3)' : '0 0 20px rgba(0, 242, 254, 0.1)',
-                                    transition: 'box-shadow 0.3s'
-                                }}>
-                                    <UploadCloud size={48} color="var(--accent-blue)" />
-                                </div>
+                                <h2 style={{ marginBottom: '0.75rem' }}>Drag & Drop Files</h2>
+                                <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                                    Images · Videos · Audio · PDFs · ZIPs · Code · Any format
+                                </p>
+                                <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.85rem', opacity: 0.6 }}>
+                                    No size limits. Drop multiple files at once.
+                                </p>
+                                <span className="btn btn-primary" style={{ padding: '12px 28px', pointerEvents: 'none' }}>
+                                    Browse Files
+                                </span>
                             </motion.div>
-                            <h2 style={{ marginBottom: '0.75rem' }}>Drag & Drop Files</h2>
-                            <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
-                                Images · Videos · Audio · PDFs · ZIPs · Code · Any format
-                            </p>
-                            <p style={{ color: 'var(--text-secondary)', marginBottom: '2rem', fontSize: '0.85rem', opacity: 0.6 }}>
-                                No size limits. Multiple files supported.
-                            </p>
-                            <span className="btn btn-primary" style={{ padding: '12px 28px', pointerEvents: 'none' }}>
-                                Browse Files
-                            </span>
-                        </motion.div>
-                    )}
+                        )}
+
+                    </AnimatePresence>
                 </motion.div>
 
                 {/* Transfer History */}
                 {transferHistory.length > 0 && (
-                    <motion.div
-                        className="glass-panel"
-                        style={{ padding: '1.25rem' }}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                    >
+                    <motion.div className="glass-panel" style={{ padding: '1.25rem' }} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                         <button
                             onClick={() => setShowHistory(h => !h)}
-                            style={{
-                                width: '100%', background: 'none', border: 'none', cursor: 'pointer',
-                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                color: 'var(--text-primary)', padding: 0
-                            }}
+                            style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'var(--text-primary)', padding: 0 }}
                         >
                             <span style={{ fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <Clock size={16} color="var(--text-secondary)" />
@@ -410,16 +383,9 @@ export default function FileTransfer({ rtcState }) {
                         </button>
                         <AnimatePresence>
                             {showHistory && (
-                                <motion.div
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: 'auto', opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    style={{ overflow: 'hidden' }}
-                                >
+                                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden' }}>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '1rem', maxHeight: '300px', overflowY: 'auto' }}>
-                                        {transferHistory.map(item => (
-                                            <HistoryRow key={item.id} item={item} />
-                                        ))}
+                                        {transferHistory.map(item => <HistoryRow key={item.id} item={item} />)}
                                     </div>
                                 </motion.div>
                             )}
@@ -427,7 +393,7 @@ export default function FileTransfer({ rtcState }) {
                     </motion.div>
                 )}
 
-                {/* Bottom hint */}
+                {/* Status indicator */}
                 <div style={{ textAlign: 'center', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem' }}>
                     <motion.div
                         animate={{ opacity: [0.4, 1, 0.4] }}
