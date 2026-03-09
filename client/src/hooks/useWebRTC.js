@@ -30,9 +30,9 @@ export function useWebRTC() {
     const lastTimeRef = useRef(Date.now());
 
     useEffect(() => {
-        // Determine signaling server URL
-        const hostname = window.location.hostname;
-        const serverUrl = `http://${hostname}:4000`;
+        // Use the environment variable. In local dev, this is http://localhost:4000.
+        // In production, set VITE_SIGNALING_SERVER to the deployed Render/Railway URL.
+        const serverUrl = import.meta.env.VITE_SIGNALING_SERVER || `http://${window.location.hostname}:4000`;
 
         const newSocket = io(serverUrl);
         newSocket.on('connect', () => setIsSocketReady(true));
