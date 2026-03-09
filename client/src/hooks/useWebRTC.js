@@ -1,37 +1,44 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
-const CHUNK_SIZE = 256 * 1024; // 256KB chunks (maximum safe threshold for modern WebRTC data channels)
-const MAX_BUFFER_SIZE = 8 * 1024 * 1024; // Safe 8MB buffer limit (Chrome can crash on 16MB+)
+const CHUNK_SIZE = 256 * 1024; // 256KB chunks
+const MAX_BUFFER_SIZE = 8 * 1024 * 1024; // 8MB buffer limit
 
 export function useWebRTC() {
     const [socket, setSocket] = useState(null);
     const [peerConnection, setPeerConnection] = useState(null);
     const [dataChannel, setDataChannel] = useState(null);
     const [roomId, setRoomId] = useState('');
-    const [status, setStatus] = useState('idle'); // idle, creating, joining, waiting, connecting, connected
+    const [status, setStatus] = useState('idle');
     const [error, setError] = useState('');
 
     // File Transfer State
     const [isSocketReady, setIsSocketReady] = useState(false);
     const [incomingFileInfo, setIncomingFileInfo] = useState(null);
-    const [incomingChunks, setIncomingChunks] = useState([]);
     const [transferProgress, setTransferProgress] = useState(0);
     const [transferSpeed, setTransferSpeed] = useState(0);
     const [isReceiving, setIsReceiving] = useState(false);
     const [isSending, setIsSending] = useState(false);
 
+    // Multi-file queue state
+    const [fileQueue, setFileQueue] = useState([]);
+    const [currentQueueIndex, setCurrentQueueIndex] = useState(0);
+    const [totalQueueLength, setTotalQueueLength] = useState(0);
+
+    // Transfer history: { id, name, size, type, direction: 'sent'|'received', timestamp, blobUrl? }
+    const [transferHistory, setTransferHistory] = useState([]);
+
     const pcRef = useRef(null);
     const dcRef = useRef(null);
     const socketRef = useRef(null);
+    const fileQueueRef = useRef([]);
+    const isSendingRef = useRef(false);
 
     // Speed metrics
     const lastProgressRef = useRef(0);
     const lastTimeRef = useRef(Date.now());
 
     useEffect(() => {
-        // Use the environment variable. In local dev, this is http://localhost:4000.
-        // In production, set VITE_SIGNALING_SERVER to the deployed Render/Railway URL.
         const serverUrl = import.meta.env.VITE_SIGNALING_SERVER || `http://${window.location.hostname}:4000`;
 
         const newSocket = io(serverUrl);
@@ -50,10 +57,8 @@ export function useWebRTC() {
         const pc = new RTCPeerConnection({
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                // Add Cloudflare's high-performance public STUN for better NAT traversal routing
                 { urls: 'stun:stun.cloudflare.com:3478' }
             ],
-            // Help ensure the browser doesn't try to use a slow relay if it can avoid it
             iceTransportPolicy: 'all',
         });
 
@@ -74,7 +79,6 @@ export function useWebRTC() {
                 setStatus('disconnected');
                 setError('Peer connection failed');
             } else if (pc.connectionState === 'disconnected') {
-                // Allow time for reconnection (e.g. when app is backgrounded on mobile)
                 setTimeout(() => {
                     if (pcRef.current && pcRef.current.connectionState === 'disconnected') {
                         setStatus('disconnected');
@@ -84,7 +88,6 @@ export function useWebRTC() {
             }
         };
 
-        // Receive data channel
         pc.ondatachannel = (event) => {
             const receiveChannel = event.channel;
             setupDataChannel(receiveChannel);
@@ -103,10 +106,6 @@ export function useWebRTC() {
             setStatus('connected');
         };
 
-        channel.onclose = () => {
-            console.log('Data channel closed');
-        };
-
         let receivedSize = 0;
         let fileBuffer = [];
         let currentMetadata = null;
@@ -114,7 +113,6 @@ export function useWebRTC() {
 
         channel.onmessage = (event) => {
             if (typeof event.data === 'string') {
-                // Metadata message
                 const message = JSON.parse(event.data);
                 if (message.type === 'file-start') {
                     currentMetadata = message.meta;
@@ -127,13 +125,24 @@ export function useWebRTC() {
                     lastTimeRef.current = t0;
                     lastProgressRef.current = 0;
                 } else if (message.type === 'file-end') {
-                    // File complete, save it
-                    const blob = new Blob(fileBuffer);
-                    const url = URL.createObjectURL(blob);
+                    // Reassemble and download with the correct MIME type preserved
+                    const blob = new Blob(fileBuffer, { type: currentMetadata.type || 'application/octet-stream' });
+                    const blobUrl = URL.createObjectURL(blob);
                     const a = document.createElement('a');
-                    a.href = url;
+                    a.href = blobUrl;
                     a.download = currentMetadata.name;
                     a.click();
+
+                    // Add to history
+                    setTransferHistory(prev => [{
+                        id: Date.now(),
+                        name: currentMetadata.name,
+                        size: currentMetadata.size,
+                        type: currentMetadata.type,
+                        direction: 'received',
+                        timestamp: new Date().toLocaleTimeString(),
+                        blobUrl
+                    }, ...prev]);
 
                     setIsReceiving(false);
                     setTransferProgress(100);
@@ -146,21 +155,17 @@ export function useWebRTC() {
                 // Binary chunk
                 fileBuffer.push(event.data);
                 receivedSize += event.data.byteLength;
-
                 if (currentMetadata) {
-                    // Update state variables (refs) without triggering React re-renders directly
                     lastProgressRef.current = receivedSize;
                 }
             }
         };
 
-        // Decoupled UI Updater Interval (runs 4 times a second)
+        // Decoupled UI Updater Interval (4 times/second)
         const uiInterval = setInterval(() => {
             if (currentMetadata && lastProgressRef.current > 0) {
                 const currentReceived = lastProgressRef.current;
                 const progress = Math.round((currentReceived / currentMetadata.size) * 100);
-
-                // Only update React state if it actually changed
                 setTransferProgress(prev => (prev !== progress ? progress : prev));
 
                 const now = Date.now();
@@ -184,7 +189,7 @@ export function useWebRTC() {
         setDataChannel(channel);
     }, []);
 
-    // Socket event listeners orchestration
+    // Socket event listeners
     useEffect(() => {
         if (!socket) return;
 
@@ -196,23 +201,17 @@ export function useWebRTC() {
         socket.on('room-joined', async (id) => {
             setRoomId(id);
             setStatus('connecting');
-            // The person who joins does NOT create the offer. Sender creates it.
         });
 
         socket.on('peer-joined', async (peerId) => {
-            // Receiver joined, Sender creates offer
             setStatus('connecting');
             const pc = createPeerConnection(roomId);
 
-            // Create data channel before offering with reliable ordered stream settings
-            const dc = pc.createDataChannel('fileTransfer', {
-                ordered: true // Ensures TCP-like reliability and prevents out-of-order packet stall
-            });
+            const dc = pc.createDataChannel('fileTransfer', { ordered: true });
             setupDataChannel(dc);
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-
             socket.emit('offer', { sdp: offer, roomId });
         });
 
@@ -241,7 +240,6 @@ export function useWebRTC() {
         });
 
         socket.on('peer-left', () => {
-            // If WebRTC is already established, a signaling drop doesn't break the P2P connection.
             if (pcRef.current && pcRef.current.connectionState === 'connected') {
                 console.log('Signaling peer left, but WebRTC remains intact.');
                 return;
@@ -279,35 +277,32 @@ export function useWebRTC() {
         socket.emit('join-room', id);
     };
 
-    const sendFile = async (file) => {
+    // Core single-file send (internal)
+    const sendSingleFile = async (file, queueIndex, totalFiles) => {
         if (!dcRef.current || dcRef.current.readyState !== 'open') {
             setError('Data channel not open');
             return;
         }
 
+        isSendingRef.current = true;
         setIsSending(true);
         setTransferProgress(0);
         setTransferSpeed(0);
+        setCurrentQueueIndex(queueIndex + 1);
 
-        // Send metadata
+        // Send metadata with MIME type
         dcRef.current.send(JSON.stringify({
             type: 'file-start',
-            meta: {
-                name: file.name,
-                size: file.size,
-                type: file.type
-            }
+            meta: { name: file.name, size: file.size, type: file.type || 'application/octet-stream' }
         }));
 
-        // Read and chunk file
         const buffer = await file.arrayBuffer();
         let offset = 0;
 
         lastTimeRef.current = Date.now();
         lastProgressRef.current = 0;
-
-        // Start decoupled UI updater for sending
         window.lastBpsSync = 0;
+
         const uiInterval = setInterval(() => {
             if (offset > 0) {
                 const progress = Math.round((offset / file.size) * 100);
@@ -324,57 +319,91 @@ export function useWebRTC() {
             }
         }, 250);
 
-        const sendChunk = () => {
-            try {
-                // Tight loop: absolutely zero UI or React logic here. Pure ArrayBuffer crunching.
-                while (offset < file.size) {
-                    if (dcRef.current.bufferedAmount >= MAX_BUFFER_SIZE) {
-                        dcRef.current.onbufferedamountlow = () => {
-                            dcRef.current.onbufferedamountlow = null;
-                            sendChunk();
-                        };
-                        return;
+        await new Promise((resolve) => {
+            const sendChunk = () => {
+                try {
+                    while (offset < file.size) {
+                        if (dcRef.current.bufferedAmount >= MAX_BUFFER_SIZE) {
+                            dcRef.current.onbufferedamountlow = () => {
+                                dcRef.current.onbufferedamountlow = null;
+                                sendChunk();
+                            };
+                            return;
+                        }
+                        const chunkLength = Math.min(CHUNK_SIZE, file.size - offset);
+                        const chunk = new Uint8Array(buffer, offset, chunkLength);
+                        dcRef.current.send(chunk);
+                        offset += chunkLength;
                     }
 
-                    // Use Uint8Array view instead of ArrayBuffer.slice() to prevent massive memory copying & GC freezes
-                    const chunkLength = Math.min(CHUNK_SIZE, file.size - offset);
-                    const chunk = new Uint8Array(buffer, offset, chunkLength);
-                    dcRef.current.send(chunk);
-                    offset += chunkLength;
-                }
-
-                if (offset >= file.size) {
                     clearInterval(uiInterval);
                     dcRef.current.send(JSON.stringify({ type: 'file-end' }));
-                    setIsSending(false);
                     setTransferProgress(100);
-                    setTimeout(() => setTransferProgress(0), 3000);
-                }
-            } catch (err) {
-                console.error("Transfer error:", err);
-                setError("Transfer halted: " + err.message);
-                clearInterval(uiInterval);
-                setIsSending(false);
-            }
-        };
 
-        dcRef.current.bufferedAmountLowThreshold = MAX_BUFFER_SIZE / 2;
-        sendChunk();
+                    // Add to transfer history
+                    setTransferHistory(prev => [{
+                        id: Date.now(),
+                        name: file.name,
+                        size: file.size,
+                        type: file.type,
+                        direction: 'sent',
+                        timestamp: new Date().toLocaleTimeString()
+                    }, ...prev]);
+
+                    resolve();
+                } catch (err) {
+                    console.error('Transfer error:', err);
+                    setError('Transfer halted: ' + err.message);
+                    clearInterval(uiInterval);
+                    resolve();
+                }
+            };
+
+            dcRef.current.bufferedAmountLowThreshold = MAX_BUFFER_SIZE / 2;
+            sendChunk();
+        });
     };
 
+    // Public: send a queue of files one-by-one
+    const sendFiles = async (files) => {
+        const fileArray = Array.from(files);
+        if (!fileArray.length) return;
+
+        setFileQueue(fileArray);
+        setTotalQueueLength(fileArray.length);
+        setCurrentQueueIndex(0);
+
+        for (let i = 0; i < fileArray.length; i++) {
+            await sendSingleFile(fileArray[i], i, fileArray.length);
+            // Small pause between files to let the receiver process
+            if (i < fileArray.length - 1) {
+                await new Promise(r => setTimeout(r, 300));
+            }
+        }
+
+        isSendingRef.current = false;
+        setIsSending(false);
+        setFileQueue([]);
+        setTimeout(() => {
+            setTransferProgress(0);
+            setTotalQueueLength(0);
+            setCurrentQueueIndex(0);
+        }, 3000);
+    };
+
+    // Legacy single-file compat
+    const sendFile = (file) => sendFiles([file]);
+
     return {
-        status,
-        roomId,
-        error,
-        createRoom,
-        joinRoom,
-        sendFile,
-        isReceiving,
-        isSending,
-        transferProgress,
-        transferSpeed,
+        status, roomId, error,
+        createRoom, joinRoom,
+        sendFile, sendFiles,
+        isReceiving, isSending,
+        transferProgress, transferSpeed,
         incomingFileInfo,
         isSocketReady,
+        fileQueue, currentQueueIndex, totalQueueLength,
+        transferHistory,
         resetError: () => setError('')
     };
 }
