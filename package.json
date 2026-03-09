@@ -1,0 +1,28 @@
+{
+  "name": "p2p-file-transfer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "framer-motion": "^12.35.2",
+    "html5-qrcode": "^2.3.8",
+    "lucide-react": "^0.577.0",
+    "qrcode.react": "^4.2.0",
+    "react-router-dom": "^7.13.1",
+    "simple-peer": "^9.11.1",
+    "socket.io-client": "^4.8.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "scripts": {
+    "start": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd server && npm start",
+    "client": "cd client && npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
